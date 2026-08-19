@@ -113,14 +113,17 @@ if(AC_RSVD_BUILD_TORCH)
         BUILD_RPATH "${TORCH_LIBRARY_DIR}")
 endif()
 
-if(AC_RSVD_BUILD_EXAMPLES)
+if(AC_RSVD_BUILD_EXAMPLES AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/cpp/CMakeLists.txt")
     add_subdirectory(examples/cpp)
 endif()
 
 include(CTest)
-if(BUILD_TESTING)
+if(BUILD_TESTING AND
+   EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/cpp/CMakeLists.txt")
     add_subdirectory(tests/cpp)
-    if(AC_RSVD_BUILD_TORCH)
+    if(AC_RSVD_BUILD_TORCH AND
+       EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/python/CMakeLists.txt")
         add_subdirectory(tests/python)
     endif()
 endif()
