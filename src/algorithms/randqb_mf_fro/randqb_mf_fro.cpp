@@ -1,6 +1,7 @@
 #include "ac_rsvd/randqb_mf_fro.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <stdexcept>
 #include <utility>
@@ -46,27 +47,40 @@ static Matrix join_rows(const Matrix& top, const Matrix& bottom) {
 static FactorizationResult make_result(
     const Matrix& q,
     const Matrix& b,
-    const RunStatistics& statistics,
+    RunStatistics statistics,
     StopReason stop_reason,
-    double residual_estimate_squared) {
+    double residual_estimate_squared,
+    std::chrono::steady_clock::time_point algorithm_start) {
     FactorizationResult result;
     result.rows = q.rows();
     result.cols = b.cols();
     result.rank = q.cols();
+    result.range_rank = q.cols();
+    result.boundary_only_rank = q.cols();
     result.statistics = statistics;
     result.stop_reason = stop_reason;
     result.residual_estimate_squared = residual_estimate_squared;
 
     if (result.rank == 0) {
+        auto end = std::chrono::steady_clock::now();
+        result.statistics.total_seconds =
+            std::chrono::duration<double>(end - algorithm_start).count();
         return result;
     }
 
     // The library returns the compact SVD of the paper's QB factorization.
+    auto svd_start = std::chrono::steady_clock::now();
     math::SvdResult svd = math::compact_qb_svd(q, b);
     Matrix v = math::transpose(svd.vt);
+    auto svd_end = std::chrono::steady_clock::now();
+    result.statistics.svd_seconds +=
+        std::chrono::duration<double>(svd_end - svd_start).count();
     result.u.assign(svd.u.data(), svd.u.data() + svd.u.size());
     result.singular_values = svd.singular_values;
     result.v.assign(v.data(), v.data() + v.size());
+    auto end = std::chrono::steady_clock::now();
+    result.statistics.total_seconds =
+        std::chrono::duration<double>(end - algorithm_start).count();
     return result;
 }
 
@@ -150,6 +164,7 @@ FactorizationResult compute_randqb_mf_fro(
     RunStatistics statistics;
     int last_block_size = 0;
     double residual_estimate_squared = 0.0;
+    auto algorithm_start = std::chrono::steady_clock::now();
 
     while (true) {
         int remaining_rank = max_rank - q.cols();
@@ -191,7 +206,8 @@ FactorizationResult compute_randqb_mf_fro(
                     b,
                     statistics,
                     StopReason::tolerance_met,
-                    residual_estimate_squared);
+                    residual_estimate_squared,
+                    algorithm_start);
             }
 
             Matrix pruned_q;
@@ -210,7 +226,8 @@ FactorizationResult compute_randqb_mf_fro(
                 pruned_b,
                 statistics,
                 StopReason::tolerance_met,
-                residual_estimate_squared);
+                residual_estimate_squared,
+                algorithm_start);
         }
 
         if (remaining_rank == 0) {
@@ -219,10 +236,15 @@ FactorizationResult compute_randqb_mf_fro(
                 b,
                 statistics,
                 StopReason::full_rank,
-                residual_estimate_squared);
+                residual_estimate_squared,
+                algorithm_start);
         }
 
+        auto orth_start = std::chrono::steady_clock::now();
         Matrix q_block = make_basis_block(sample, q);
+        auto orth_end = std::chrono::steady_clock::now();
+        statistics.orthogonalization_seconds +=
+            std::chrono::duration<double>(orth_end - orth_start).count();
         Matrix at_q = math::apply_at(matrix, q_block, statistics);
         Matrix b_block = math::transpose(at_q);
         last_block_size = q_block.cols();

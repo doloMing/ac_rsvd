@@ -17,6 +17,9 @@ struct AcRsvdOptions {
     // Seed and stream identify the ordered Gaussian direction sequence.
     std::uint64_t seed = 0;
     std::uint64_t stream = 0;
+
+    // This keeps block operator calls but uses column-wise QR for the ablation.
+    bool use_sequential_orthogonalization = false;
 };
 
 FactorizationResult compute_ac_rsvd(

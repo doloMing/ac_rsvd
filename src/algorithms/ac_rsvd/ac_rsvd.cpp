@@ -1,6 +1,7 @@
 #include "ac_rsvd/ac_rsvd.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
 
 #include "algorithms/mathematics/certificate/certificate.hpp"
@@ -29,6 +30,16 @@ static Matrix basis_with_prefix(
     return math::join_columns(basis, prefix_columns(block, prefix_size));
 }
 
+static math::BlockOrthogonalizationResult orthogonalize_panel(
+    const Matrix& block,
+    const Matrix& basis,
+    bool sequential) {
+    if (sequential) {
+        return math::orthogonalize_sequential_block(block, basis, 2);
+    }
+    return math::orthogonalize_block(block, basis, 2);
+}
+
 static FactorizationResult finish_factorization(
     const MatrixOperator& matrix,
     const Matrix& final_basis,
@@ -36,16 +47,28 @@ static FactorizationResult finish_factorization(
     double tolerance_squared,
     double residual_bound_squared,
     StopReason stop_reason,
-    RunStatistics statistics) {
+    RunStatistics statistics,
+    const math::Certificate& certificate,
+    std::chrono::steady_clock::time_point algorithm_start) {
     FactorizationResult result;
     result.rows = matrix.rows();
     result.cols = matrix.cols();
+    result.range_rank = final_basis.cols();
     result.statistics = statistics;
     result.stop_reason = stop_reason;
     result.residual_bound_squared = residual_bound_squared;
 
+    const std::vector<math::CertificateTraceEntry>& trace = certificate.trace();
+    for (const math::CertificateTraceEntry& entry : trace) {
+        result.certificate_observations.push_back(entry.x);
+        result.certificate_dimensions.push_back(entry.unused_dimension);
+    }
+
     if (final_basis.cols() == 0) {
         result.truncation_budget_squared = tolerance_squared;
+        auto end = std::chrono::steady_clock::now();
+        result.statistics.total_seconds =
+            std::chrono::duration<double>(end - algorithm_start).count();
         return result;
     }
 
@@ -63,6 +86,7 @@ static FactorizationResult finish_factorization(
             }
         }
     }
+    result.residual_decrease_squared = residual_decrease_squared;
 
     double budget = tolerance_squared;
     if (first_extra_column >= 0) {
@@ -72,11 +96,22 @@ static FactorizationResult finish_factorization(
     }
     result.truncation_budget_squared = budget;
 
+    auto svd_start = std::chrono::steady_clock::now();
     math::SvdResult svd = math::thin_svd(core);
     int rank = math::smallest_rank_for_tail(svd.singular_values, budget);
+    int boundary_only_rank = rank;
+    if (first_extra_column >= 0) {
+        boundary_only_rank = math::smallest_rank_for_tail(
+            svd.singular_values,
+            residual_decrease_squared);
+    }
+    result.boundary_only_rank = boundary_only_rank;
     svd = math::truncate_svd(svd, rank);
     svd.u = math::multiply(final_basis, svd.u);
     Matrix v = math::transpose(svd.vt);
+    auto svd_end = std::chrono::steady_clock::now();
+    result.statistics.svd_seconds +=
+        std::chrono::duration<double>(svd_end - svd_start).count();
 
     result.rank = rank;
     result.singular_values = svd.singular_values;
@@ -84,6 +119,9 @@ static FactorizationResult finish_factorization(
         result.u.assign(svd.u.data(), svd.u.data() + svd.u.size());
         result.v.assign(v.data(), v.data() + v.size());
     }
+    auto end = std::chrono::steady_clock::now();
+    result.statistics.total_seconds =
+        std::chrono::duration<double>(end - algorithm_start).count();
     return result;
 }
 
@@ -116,6 +154,7 @@ FactorizationResult compute_ac_rsvd(
         tolerance_squared,
         options.failure_probability);
     RunStatistics statistics;
+    auto algorithm_start = std::chrono::steady_clock::now();
 
     while (true) {
         if (output_basis.cols() == rows) {
@@ -126,7 +165,9 @@ FactorizationResult compute_ac_rsvd(
                 tolerance_squared,
                 0.0,
                 StopReason::full_output_space,
-                statistics);
+                statistics,
+                certificate,
+                algorithm_start);
         }
 
         int unused_at_block_start = cols - input_basis.cols();
@@ -143,7 +184,14 @@ FactorizationResult compute_ac_rsvd(
                 options.seed,
                 options.stream + redraw,
                 static_cast<std::uint64_t>(input_basis.cols()));
-            input_block = math::orthogonalize_block(gaussian, input_basis, 2);
+            auto orth_start = std::chrono::steady_clock::now();
+            input_block = orthogonalize_panel(
+                gaussian,
+                input_basis,
+                options.use_sequential_orthogonalization);
+            auto orth_end = std::chrono::steady_clock::now();
+            statistics.orthogonalization_seconds +=
+                std::chrono::duration<double>(orth_end - orth_start).count();
 
             bool singular = false;
             for (double diagonal : input_block.diagonal) {
@@ -159,8 +207,15 @@ FactorizationResult compute_ac_rsvd(
         }
 
         Matrix products = math::apply_a(matrix, input_block.q, statistics);
+        auto orth_start = std::chrono::steady_clock::now();
         math::BlockOrthogonalizationResult output_block =
-            math::orthogonalize_block(products, output_basis, 2);
+            orthogonalize_panel(
+                products,
+                output_basis,
+                options.use_sequential_orthogonalization);
+        auto orth_end = std::chrono::steady_clock::now();
+        statistics.orthogonalization_seconds +=
+            std::chrono::duration<double>(orth_end - orth_start).count();
 
         // The fixed QR order lets us reveal the block one column at a time.
         for (int column = 0; column < block_size; ++column) {
@@ -174,7 +229,9 @@ FactorizationResult compute_ac_rsvd(
                     tolerance_squared,
                     0.0,
                     StopReason::full_output_space,
-                    statistics);
+                    statistics,
+                    certificate,
+                    algorithm_start);
             }
 
             int unused_dimension = unused_at_block_start - column;
@@ -196,7 +253,9 @@ FactorizationResult compute_ac_rsvd(
                     tolerance_squared,
                     0.0,
                     StopReason::final_input_direction,
-                    statistics);
+                    statistics,
+                    certificate,
+                    algorithm_start);
             }
 
             if (diagonal == 0.0) {
@@ -209,15 +268,28 @@ FactorizationResult compute_ac_rsvd(
                     tolerance_squared,
                     0.0,
                     StopReason::zero_residual,
-                    statistics);
+                    statistics,
+                    certificate,
+                    algorithm_start);
             }
 
             double observation =
                 unused_dimension * diagonal * diagonal;
-            if (certificate.update(observation, unused_dimension)) {
+            auto certificate_start = std::chrono::steady_clock::now();
+            bool crossed = certificate.update(observation, unused_dimension);
+            auto certificate_end = std::chrono::steady_clock::now();
+            statistics.certificate_seconds +=
+                std::chrono::duration<double>(
+                    certificate_end - certificate_start).count();
+            if (crossed) {
                 // Fix U_t before using the unprocessed suffix of this block.
+                certificate_start = std::chrono::steady_clock::now();
                 double residual_bound_squared =
                     certificate.continuous_inverse();
+                certificate_end = std::chrono::steady_clock::now();
+                statistics.certificate_seconds +=
+                    std::chrono::duration<double>(
+                        certificate_end - certificate_start).count();
                 Matrix current_basis = basis_with_prefix(
                     output_basis, output_block.q, column);
                 math::QrResult qr;
@@ -226,9 +298,14 @@ FactorizationResult compute_ac_rsvd(
                 qr.diagonal = output_block.diagonal;
 
                 // The lower-right QR core contains the useful block suffix.
+                orth_start = std::chrono::steady_clock::now();
                 Matrix trailing = math::trailing_basis(qr, column);
                 math::project_out(current_basis, trailing, 2);
                 trailing = math::column_space(trailing);
+                orth_end = std::chrono::steady_clock::now();
+                statistics.orthogonalization_seconds +=
+                    std::chrono::duration<double>(
+                        orth_end - orth_start).count();
 
                 int first_extra_column = current_basis.cols();
                 current_basis.append_columns(trailing);
@@ -240,7 +317,9 @@ FactorizationResult compute_ac_rsvd(
                     tolerance_squared,
                     residual_bound_squared,
                     StopReason::certificate,
-                    statistics);
+                    statistics,
+                    certificate,
+                    algorithm_start);
             }
         }
 

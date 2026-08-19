@@ -40,6 +40,8 @@ else()
     set(AC_RSVD_LAPACK_TARGET ac_rsvd_lapack)
 endif()
 
+find_package(OpenMP REQUIRED)
+
 file(GLOB_RECURSE AC_RSVD_CORE_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/algorithms/*.cpp")
 
@@ -54,7 +56,8 @@ target_include_directories(ac_rsvd_core
 
 target_link_libraries(ac_rsvd_core PUBLIC
     ${AC_RSVD_LAPACK_TARGET}
-    ${AC_RSVD_BLAS_TARGET})
+    ${AC_RSVD_BLAS_TARGET}
+    OpenMP::OpenMP_CXX)
 
 target_compile_options(ac_rsvd_core PRIVATE
     -Wall

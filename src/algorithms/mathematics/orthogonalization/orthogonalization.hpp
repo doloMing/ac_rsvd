@@ -27,6 +27,11 @@ BlockOrthogonalizationResult orthogonalize_block(
     const Matrix& basis,
     int projection_passes = 2);
 
+BlockOrthogonalizationResult orthogonalize_sequential_block(
+    const Matrix& block,
+    const Matrix& basis,
+    int projection_passes = 2);
+
 ColumnOrthogonalizationResult orthogonalize_column(
     const Matrix& column,
     const Matrix& basis,
