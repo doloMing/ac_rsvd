@@ -19,6 +19,7 @@ SvdResult thin_svd(const Matrix& matrix);
 SvdResult compact_qb_svd(const Matrix& q, const Matrix& b);
 SvdResult truncate_svd(const SvdResult& svd, int rank);
 
+// Return the left singular vectors whose singular values clear the cutoff.
 Matrix column_space(const Matrix& matrix, double relative_tolerance = -1.0);
 
 }  // namespace math

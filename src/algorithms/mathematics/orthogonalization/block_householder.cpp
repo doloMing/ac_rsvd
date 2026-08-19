@@ -11,6 +11,7 @@ BlockOrthogonalizationResult orthogonalize_block(
     int projection_passes) {
     BlockOrthogonalizationResult result;
     result.projected = block;
+    // Reorthogonalize first, then keep the ordered Householder QR factors.
     project_out(basis, result.projected, projection_passes);
 
     QrResult qr = thin_qr(result.projected);

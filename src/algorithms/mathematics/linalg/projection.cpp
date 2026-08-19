@@ -20,6 +20,7 @@ void subtract_projection(const Matrix& basis, Matrix& block) {
 }
 
 void project_out(const Matrix& basis, Matrix& block, int passes) {
+    // A second pass repairs most of the orthogonality lost to rounding.
     for (int pass = 0; pass < passes; ++pass) {
         subtract_projection(basis, block);
     }

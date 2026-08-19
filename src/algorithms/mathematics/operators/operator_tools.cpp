@@ -8,6 +8,7 @@ Matrix apply_a(
     const Matrix& input,
     RunStatistics& statistics) {
     Matrix output(matrix.rows(), input.cols());
+    // One panel is one operator call, regardless of its column count.
     matrix.apply(input.data(), input.cols(), output.data());
     statistics.a_columns += input.cols();
     statistics.a_block_calls += 1;
@@ -19,6 +20,7 @@ Matrix apply_at(
     const Matrix& input,
     RunStatistics& statistics) {
     Matrix output(matrix.cols(), input.cols());
+    // Count A^T separately because the algorithms use it only at chosen stages.
     matrix.apply_transpose(input.data(), input.cols(), output.data());
     statistics.at_columns += input.cols();
     statistics.at_block_calls += 1;

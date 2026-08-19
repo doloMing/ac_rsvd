@@ -6,6 +6,7 @@
 namespace ac_rsvd {
 namespace math {
 
+// A direct matrix operator for dense inputs.
 class DenseOperator : public MatrixOperator {
 public:
     explicit DenseOperator(const Matrix& matrix);

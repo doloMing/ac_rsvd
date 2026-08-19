@@ -89,6 +89,7 @@ void Matrix::append_columns(const Matrix& block) {
         throw std::length_error("Matrix is too large for the LP64 backend");
     }
     if (block.size() > 0) {
+        // Whole columns are contiguous, so appending is one vector insertion.
         values_.insert(values_.end(), block.data(), block.data() + block.size());
     }
     cols_ = static_cast<int>(new_column_count);

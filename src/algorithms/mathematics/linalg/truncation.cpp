@@ -6,6 +6,7 @@ namespace math {
 std::vector<double> squared_tail_sums(const std::vector<double>& singular_values) {
     int count = static_cast<int>(singular_values.size());
     std::vector<double> tail(count + 1, 0.0);
+    // Summing backward gives every Frobenius tail in one pass.
     for (int index = count - 1; index >= 0; --index) {
         double value = singular_values[index];
         tail[index] = tail[index + 1] + value * value;

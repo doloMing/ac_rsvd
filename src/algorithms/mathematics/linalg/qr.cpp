@@ -83,6 +83,7 @@ QrResult thin_qr(const Matrix& matrix) {
         &info);
     check_lapack_info(info, "dgeqrf");
 
+    // LAPACK stores R above the diagonal and Householder data below it.
     for (int col = 0; col < cols; ++col) {
         int last_row = std::min(col, thin_cols - 1);
         for (int row = 0; row <= last_row; ++row) {
@@ -119,6 +120,7 @@ QrResult thin_qr(const Matrix& matrix) {
         &info);
     check_lapack_info(info, "dorgqr");
 
+    // The nonnegative diagonal gives the sequential residual norms in order.
     for (int index = 0; index < thin_cols; ++index) {
         if (result.r(index, index) < 0.0) {
             for (int row = 0; row < rows; ++row) {

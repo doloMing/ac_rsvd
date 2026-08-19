@@ -49,11 +49,13 @@ static FactorizationResult finish_factorization(
         return result;
     }
 
+    // The range is fixed. One adjoint panel now gives the whole core.
     Matrix at_basis = math::apply_at(matrix, final_basis, result.statistics);
     Matrix core = math::transpose(at_basis);
 
     double residual_decrease_squared = 0.0;
     if (first_extra_column >= 0) {
+        // These rows are H_t^T A, so their squared norm is Delta_t.
         for (int col = 0; col < core.cols(); ++col) {
             for (int row = first_extra_column; row < core.rows(); ++row) {
                 double value = core(row, col);
@@ -108,6 +110,7 @@ FactorizationResult compute_ac_rsvd(
 
     Matrix input_basis(cols, 0);
     Matrix output_basis(rows, 0);
+    // In the exact model, output_basis spans A times input_basis.
     math::Certificate certificate(
         std::max(2, cols),
         tolerance_squared,
@@ -130,20 +133,36 @@ FactorizationResult compute_ac_rsvd(
         int block_size = std::min(options.block_size, unused_at_block_start);
 
         Matrix gaussian(cols, block_size);
-        math::fill_gaussian(
-            gaussian.data(),
-            cols,
-            block_size,
-            options.seed,
-            options.stream,
-            static_cast<std::uint64_t>(input_basis.cols()));
+        math::BlockOrthogonalizationResult input_block;
+        std::uint64_t redraw = 0;
+        while (true) {
+            math::fill_gaussian(
+                gaussian.data(),
+                cols,
+                block_size,
+                options.seed,
+                options.stream + redraw,
+                static_cast<std::uint64_t>(input_basis.cols()));
+            input_block = math::orthogonalize_block(gaussian, input_basis, 2);
 
-        math::BlockOrthogonalizationResult input_block =
-            math::orthogonalize_block(gaussian, input_basis, 2);
+            bool singular = false;
+            for (double diagonal : input_block.diagonal) {
+                if (diagonal == 0.0) {
+                    singular = true;
+                }
+            }
+            if (!singular) {
+                break;
+            }
+            // A singular projected Gaussian panel is a zero-probability draw.
+            ++redraw;
+        }
+
         Matrix products = math::apply_a(matrix, input_block.q, statistics);
         math::BlockOrthogonalizationResult output_block =
             math::orthogonalize_block(products, output_basis, 2);
 
+        // The fixed QR order lets us reveal the block one column at a time.
         for (int column = 0; column < block_size; ++column) {
             if (output_basis.cols() + column == rows) {
                 Matrix current_basis = basis_with_prefix(
@@ -196,6 +215,9 @@ FactorizationResult compute_ac_rsvd(
             double observation =
                 unused_dimension * diagonal * diagonal;
             if (certificate.update(observation, unused_dimension)) {
+                // Fix U_t before using the unprocessed suffix of this block.
+                double residual_bound_squared =
+                    certificate.continuous_inverse();
                 Matrix current_basis = basis_with_prefix(
                     output_basis, output_block.q, column);
                 math::QrResult qr;
@@ -203,14 +225,13 @@ FactorizationResult compute_ac_rsvd(
                 qr.r = output_block.r;
                 qr.diagonal = output_block.diagonal;
 
+                // The lower-right QR core contains the useful block suffix.
                 Matrix trailing = math::trailing_basis(qr, column);
                 math::project_out(current_basis, trailing, 2);
                 trailing = math::column_space(trailing);
 
                 int first_extra_column = current_basis.cols();
                 current_basis.append_columns(trailing);
-                double residual_bound_squared =
-                    certificate.continuous_inverse();
 
                 return finish_factorization(
                     matrix,
@@ -223,6 +244,7 @@ FactorizationResult compute_ac_rsvd(
             }
         }
 
+        // A completed panel now becomes part of the persistent state.
         input_basis.append_columns(input_block.q);
         output_basis.append_columns(output_block.q);
     }

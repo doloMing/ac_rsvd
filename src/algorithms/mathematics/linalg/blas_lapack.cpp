@@ -32,6 +32,7 @@ void gemm(
     double alpha,
     double beta,
     Matrix& result) {
+    // BLAS computes result = alpha*op(left)*op(right) + beta*result.
     int left_rows = transpose_left ? left.cols() : left.rows();
     int left_cols = transpose_left ? left.rows() : left.cols();
     int right_rows = transpose_right ? right.cols() : right.rows();

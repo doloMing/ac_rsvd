@@ -9,6 +9,7 @@ struct CertificateTraceEntry {
     int unused_dimension = 0;
 };
 
+// The scale mixture is kept in log space and updated one observation at a time.
 class Certificate {
 public:
     Certificate(
@@ -26,6 +27,7 @@ public:
     double log_replay(double candidate) const;
     bool crosses(double candidate) const;
 
+    // Find the smallest squared residual that still crosses the threshold.
     double continuous_inverse() const;
 
     const std::vector<CertificateTraceEntry>& trace() const;

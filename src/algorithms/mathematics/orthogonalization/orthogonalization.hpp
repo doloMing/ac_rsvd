@@ -9,6 +9,7 @@ namespace ac_rsvd {
 namespace math {
 
 struct BlockOrthogonalizationResult {
+    // projected is the block after removing the old basis and before QR.
     Matrix projected;
     Matrix q;
     Matrix r;

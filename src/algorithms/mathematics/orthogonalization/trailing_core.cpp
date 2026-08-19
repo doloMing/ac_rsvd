@@ -29,6 +29,7 @@ Matrix trailing_basis(
         first_column,
         tail_rows,
         tail_cols);
+    // range(Q_tail R_tail) = Q_tail range(R_tail).
     Matrix small_basis = column_space(core, relative_tolerance);
     Matrix q_tail = copy_block(
         block_qr.q,

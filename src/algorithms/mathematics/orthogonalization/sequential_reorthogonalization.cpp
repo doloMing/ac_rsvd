@@ -19,6 +19,7 @@ ColumnOrthogonalizationResult orthogonalize_column(
 
     ColumnOrthogonalizationResult result;
     result.q = column;
+    // Normalize only the part left outside the current basis.
     project_out(basis, result.q, projection_passes);
     result.norm = vector_norm(result.q.data(), result.q.rows());
     result.accepted = result.norm > absolute_tolerance;

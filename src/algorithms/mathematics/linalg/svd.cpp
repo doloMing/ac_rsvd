@@ -105,6 +105,7 @@ SvdResult compact_qb_svd(const Matrix& q, const Matrix& b) {
         throw std::invalid_argument("Q and B dimensions do not match");
     }
 
+    // If B = U_b S V^T, then QB = (Q U_b) S V^T.
     SvdResult result = thin_svd(b);
     result.u = multiply(q, result.u);
     return result;
@@ -132,6 +133,7 @@ Matrix column_space(const Matrix& matrix, double relative_tolerance) {
 
     double tolerance = relative_tolerance;
     if (tolerance < 0.0) {
+        // This is the usual numerical-rank cutoff scaled by the largest value.
         tolerance = std::numeric_limits<double>::epsilon() *
                     std::max(matrix.rows(), matrix.cols());
     }

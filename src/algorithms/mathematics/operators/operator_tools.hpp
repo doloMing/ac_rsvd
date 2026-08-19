@@ -7,6 +7,7 @@
 namespace ac_rsvd {
 namespace math {
 
+// These panel calls also account for operator work in the run statistics.
 Matrix apply_a(
     const MatrixOperator& matrix,
     const Matrix& input,

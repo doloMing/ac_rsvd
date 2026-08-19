@@ -16,6 +16,7 @@ int DenseOperator::cols() const {
 }
 
 void DenseOperator::apply(const double* x, int block_cols, double* y) const {
+    // Compute every column of Y = A X in column-major order.
     std::fill(y, y + rows() * block_cols, 0.0);
     for (int col = 0; col < block_cols; ++col) {
         for (int inner = 0; inner < cols(); ++inner) {
@@ -31,6 +32,7 @@ void DenseOperator::apply_transpose(
     const double* y,
     int block_cols,
     double* x) const {
+    // The transpose path computes X = A^T Y with the same layout.
     std::fill(x, x + cols() * block_cols, 0.0);
     for (int col = 0; col < block_cols; ++col) {
         for (int inner = 0; inner < rows(); ++inner) {

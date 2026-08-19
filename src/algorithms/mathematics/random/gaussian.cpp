@@ -34,6 +34,7 @@ std::array<double, 4> gaussian_group(
     std::uint64_t stream,
     std::uint64_t direction,
     std::uint64_t group) {
+    // One counter names four rows of one random direction.
     std::array<std::uint32_t, 4> counter = {
         static_cast<std::uint32_t>(group),
         static_cast<std::uint32_t>(group >> 32),
@@ -53,6 +54,7 @@ std::array<double, 4> gaussian_group(
     double radius_1 = std::sqrt(-2.0 * std::log(u_2));
     double angle_1 = two_pi * u_3;
 
+    // Two Box-Muller pairs give four independent normal coordinates.
     return {
         radius_0 * std::cos(angle_0),
         radius_0 * std::sin(angle_0),

@@ -5,6 +5,7 @@
 namespace ac_rsvd {
 namespace math {
 
+// A small column-major matrix passed directly to BLAS and LAPACK.
 class Matrix {
 public:
     Matrix();

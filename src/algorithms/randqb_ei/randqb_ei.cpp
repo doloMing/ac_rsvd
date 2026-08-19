@@ -22,13 +22,12 @@ static void subtract_matrix(Matrix& left, const Matrix& right) {
 
 static Matrix make_basis_block(const Matrix& sample, const Matrix& basis) {
     Matrix block = math::thin_qr(sample).q;
-    if (basis.cols() == 0) {
-        return block;
+    if (basis.cols() > 0) {
+        Matrix coefficients = math::transpose_multiply(basis, block);
+        Matrix projection = math::multiply(basis, coefficients);
+        subtract_matrix(block, projection);
     }
-
-    Matrix coefficients = math::transpose_multiply(basis, block);
-    Matrix projection = math::multiply(basis, coefficients);
-    subtract_matrix(block, projection);
+    // Algorithm 2 takes this second QR even for the first block.
     return math::thin_qr(block).q;
 }
 
@@ -57,6 +56,7 @@ static FactorizationResult make_result(
         return result;
     }
 
+    // The library returns the compact SVD of the paper's QB factorization.
     math::SvdResult svd = math::compact_qb_svd(q, b);
     Matrix v = math::transpose(svd.vt);
     result.u.assign(svd.u.data(), svd.u.data() + svd.u.size());
@@ -68,26 +68,20 @@ static FactorizationResult make_result(
 FactorizationResult compute_randqb_ei(
     const MatrixOperator& matrix,
     const RandQbEiOptions& options) {
-    if (options.tolerance <= 0.0 || options.block_size <= 0 ||
-        options.frobenius_norm < 0.0) {
+    if (options.tolerance <= 0.0 || options.block_size <= 0) {
         throw std::invalid_argument("Tolerance and block size must be positive");
+    }
+    if (options.frobenius_norm < 0.0) {
+        throw std::invalid_argument("Frobenius norm cannot be negative");
     }
 
     int rows = matrix.rows();
     int cols = matrix.cols();
     int max_rank = std::min(rows, cols);
     double tolerance_squared = options.tolerance * options.tolerance;
+    // EI starts from E = ||A||_F^2 and subtracts captured row energy.
     double error_squared = options.frobenius_norm * options.frobenius_norm;
     RunStatistics statistics;
-
-    if (error_squared <= tolerance_squared) {
-        return make_result(
-            Matrix(rows, 0),
-            Matrix(0, cols),
-            statistics,
-            StopReason::tolerance_met,
-            error_squared);
-    }
 
     Matrix q(rows, 0);
     Matrix b(0, cols);
@@ -107,6 +101,7 @@ FactorizationResult compute_randqb_ei(
         Matrix z = math::apply_a(matrix, omega, statistics);
         Matrix sample = z;
         if (q.cols() > 0) {
+            // This is (A - QB) Omega without forming the residual.
             Matrix b_omega = math::multiply(b, omega);
             Matrix represented = math::multiply(q, b_omega);
             subtract_matrix(sample, represented);
@@ -115,10 +110,16 @@ FactorizationResult compute_randqb_ei(
         Matrix q_block = make_basis_block(sample, q);
         Matrix at_q = math::apply_at(matrix, q_block, statistics);
         Matrix b_block = math::transpose(at_q);
+        if (q.cols() > 0) {
+            // This is zero exactly and repairs lost orthogonality in FP64.
+            Matrix overlap = math::transpose_multiply(q_block, q);
+            Matrix correction = math::multiply(overlap, b);
+            subtract_matrix(b_block, correction);
+        }
 
         int keep = block_size;
         bool tolerance_met = false;
-        // Stop on the first row that gets us below the target.
+        // Each row is one exact Pythagorean decrease in E.
         for (int row = 0; row < block_size; ++row) {
             double row_energy = 0.0;
             for (int col = 0; col < cols; ++col) {
@@ -144,7 +145,7 @@ FactorizationResult compute_randqb_ei(
                 b,
                 statistics,
                 StopReason::tolerance_met,
-                std::max(0.0, error_squared));
+                error_squared);
         }
     }
 
@@ -153,7 +154,7 @@ FactorizationResult compute_randqb_ei(
         b,
         statistics,
         StopReason::full_rank,
-        std::max(0.0, error_squared));
+        error_squared);
 }
 
 }  // namespace ac_rsvd

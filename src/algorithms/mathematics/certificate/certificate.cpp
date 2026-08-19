@@ -59,6 +59,7 @@ Certificate::Certificate(
 
     int scale_count =
         1 + static_cast<int>(std::ceil(2.0 * std::log2(input_dimension)));
+    // The dyadic grid mixes the admissible betting scales from 1/3 downward.
     for (int index = 0; index < scale_count; ++index) {
         scales_.push_back(std::ldexp(1.0 / 3.0, -index));
     }
@@ -87,6 +88,7 @@ bool Certificate::update(double x, int unused_dimension) {
     std::vector<double> normalizers(scales_.size());
     double log_start = std::log(weight) - std::log(scales_.size());
 
+    // Each component gains exp(-gamma*x/tau^2) / Phi_d(-gamma).
     for (std::size_t index = 0; index < scales_.size(); ++index) {
         double gamma = scales_[index];
         normalizers[index] = log_phi(unused_dimension, -gamma);
@@ -139,6 +141,7 @@ double Certificate::continuous_inverse() const {
 
     double low = 0.0;
     double high = tolerance_squared_;
+    // The replay value increases monotonically with the candidate residual.
     for (int iteration = 0; iteration < 100; ++iteration) {
         double middle = low + 0.5 * (high - low);
         if (middle == low || middle == high) {

@@ -32,6 +32,7 @@ static Matrix make_basis_block(const Matrix& sample, const Matrix& basis) {
     Matrix coefficients = math::transpose_multiply(basis, block);
     Matrix projection = math::multiply(basis, coefficients);
     subtract_matrix(block, projection);
+    // Reorthogonalize once against every accepted block.
     return math::thin_qr(block).q;
 }
 
@@ -60,6 +61,7 @@ static FactorizationResult make_result(
         return result;
     }
 
+    // The library returns the compact SVD of the paper's QB factorization.
     math::SvdResult svd = math::compact_qb_svd(q, b);
     Matrix v = math::transpose(svd.vt);
     result.u.assign(svd.u.data(), svd.u.data() + svd.u.size());
@@ -88,10 +90,11 @@ static void prune_last_block(
         }
         row_energy.push_back(std::make_pair(energy, row));
     }
+    // These are the Pythagorean costs of removing last-block columns.
     std::sort(row_energy.begin(), row_energy.end());
 
     std::vector<int> discard(last_block_size, 0);
-    // Try the smallest rows first.
+    // Remove the cheapest rows while the estimated error stays below tau.
     for (int index = 0; index < last_block_size; ++index) {
         double next = residual_estimate_squared + row_energy[index].first;
         if (next >= tolerance_squared) {
@@ -165,6 +168,7 @@ FactorizationResult compute_randqb_mf_fro(
         statistics.directions_processed += block_size;
 
         double scale = 1.0 / std::sqrt(static_cast<double>(block_size));
+        // Now every entry of Omega has variance 1 / block_size.
         for (int index = 0; index < omega.size(); ++index) {
             omega.data()[index] *= scale;
         }
@@ -177,8 +181,9 @@ FactorizationResult compute_randqb_mf_fro(
             subtract_matrix(sample, represented);
         }
 
-        // This sketch tests the basis we already have.
+        // ||(A - QB) Omega||_F estimates the current residual norm.
         residual_estimate_squared = math::squared_frobenius_norm(sample);
+        // The paper uses the closed tolerance boundary here.
         if (residual_estimate_squared <= tolerance_squared) {
             if (q.cols() == 0) {
                 return make_result(
@@ -199,6 +204,7 @@ FactorizationResult compute_randqb_mf_fro(
                 pruned_q,
                 pruned_b,
                 residual_estimate_squared);
+            // The estimate now includes the energy of every discarded row.
             return make_result(
                 pruned_q,
                 pruned_b,

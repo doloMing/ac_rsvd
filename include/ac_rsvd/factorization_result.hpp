@@ -33,8 +33,12 @@ struct FactorizationResult {
 
     RunStatistics statistics;
     StopReason stop_reason = StopReason::certificate;
+
+    // Baseline error diagnostic. EI may make it negative by cancellation.
     double residual_estimate_squared = 0.0;
+    // AC-RSVD's exact-model continuous inverse U_t.
     double residual_bound_squared = 0.0;
+    // Squared tail budget used for the final compact SVD.
     double truncation_budget_squared = 0.0;
 };
 
