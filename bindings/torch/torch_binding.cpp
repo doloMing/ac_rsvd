@@ -2,6 +2,7 @@
 #include <torch/library.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -13,6 +14,7 @@
 #include "ac_rsvd/randqb_mf_fro.hpp"
 #include "algorithms/mathematics/analysis/theory_bounds.hpp"
 #include "algorithms/mathematics/certificate/certificate.hpp"
+#include "algorithms/mathematics/certificate/raw_gaussian_certificate.hpp"
 #include "algorithms/mathematics/linalg/blas_lapack.hpp"
 #include "algorithms/mathematics/linalg/matrix.hpp"
 #include "algorithms/mathematics/operators/dense_operator.hpp"
@@ -29,6 +31,17 @@ using TorchResult = std::tuple<
     at::Tensor,
     at::Tensor,
     at::Tensor,
+    std::int64_t>;
+
+using TorchExactFroResult = std::tuple<
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    at::Tensor,
+    std::int64_t,
     std::int64_t>;
 
 using TorchTheoryResult = std::tuple<at::Tensor, at::Tensor>;
@@ -103,7 +116,7 @@ TorchResult copy_result(const FactorizationResult& result) {
     }
     at::Tensor v = copy_matrix(result.v, result.cols, result.rank);
 
-    at::Tensor counters = at::empty({7}, at::kLong);
+    at::Tensor counters = at::empty({26}, at::kLong);
     std::int64_t* counter_data = counters.data_ptr<std::int64_t>();
     counter_data[0] = result.statistics.directions_processed;
     counter_data[1] = result.statistics.a_columns;
@@ -112,14 +125,46 @@ TorchResult copy_result(const FactorizationResult& result) {
     counter_data[4] = result.statistics.at_block_calls;
     counter_data[5] = result.range_rank;
     counter_data[6] = result.boundary_only_rank;
+    counter_data[7] = result.statistics.assimilated_directions;
+    counter_data[8] = result.statistics.validation_directions;
+    counter_data[9] = result.statistics.certificate_bound_round;
+    counter_data[10] = result.certificate_max_observations;
+    counter_data[11] = result.statistics.ordinary_columns;
+    counter_data[12] = result.statistics.ordinary_block_calls;
+    counter_data[13] = result.statistics.ordinary_observations;
+    counter_data[14] = result.statistics.ordinary_assimilated;
+    counter_data[15] = result.statistics.ordinary_discarded;
+    counter_data[16] = result.statistics.diagnostic_columns;
+    counter_data[17] = result.statistics.diagnostic_block_calls;
+    counter_data[18] = result.statistics.diagnostic_pilot_columns;
+    counter_data[19] = result.statistics.diagnostic_heldout_columns;
+    counter_data[20] = result.diagnostic.trigger_range_rank;
+    counter_data[21] = result.diagnostic.heldout_directions;
+    counter_data[22] = result.diagnostic.heldout_endpoints;
+    counter_data[23] = result.diagnostic.first_crossing_direction;
+    counter_data[24] = result.diagnostic.bound_direction;
+    counter_data[25] = static_cast<std::int64_t>(
+        result.residual_bound_source);
 
-    at::Tensor diagnostics = at::empty({5}, at::kDouble);
+    at::Tensor diagnostics = at::empty({16}, at::kDouble);
     double* diagnostic_data = diagnostics.data_ptr<double>();
     diagnostic_data[0] = result.residual_estimate_squared;
     diagnostic_data[1] = result.residual_bound_squared;
     diagnostic_data[2] = result.truncation_budget_squared;
     diagnostic_data[3] = result.residual_decrease_squared;
     diagnostic_data[4] = result.direct_error_squared;
+    diagnostic_data[5] = result.base_truncation_budget_squared;
+    diagnostic_data[6] = result.diagnostic.attempted ? 1.0 : 0.0;
+    diagnostic_data[7] = result.diagnostic.heldout_activated ? 1.0 : 0.0;
+    diagnostic_data[8] = result.diagnostic.crossed ? 1.0 : 0.0;
+    diagnostic_data[9] =
+        result.diagnostic.reached_refinement_target ? 1.0 : 0.0;
+    diagnostic_data[10] = result.diagnostic.trigger_mean_ratio;
+    diagnostic_data[11] = result.diagnostic.pilot_mean;
+    diagnostic_data[12] = result.diagnostic.spectral_cap;
+    diagnostic_data[13] = result.diagnostic.gamma;
+    diagnostic_data[14] = result.diagnostic.bound_sum;
+    diagnostic_data[15] = result.diagnostic.first_crossing_sum;
 
     at::Tensor timings = at::empty({6}, at::kDouble);
     double* timing_data = timings.data_ptr<double>();
@@ -132,11 +177,16 @@ TorchResult copy_result(const FactorizationResult& result) {
 
     std::int64_t trace_size =
         static_cast<std::int64_t>(result.certificate_observations.size());
-    at::Tensor trace = at::empty({trace_size, 2}, at::kDouble);
+    at::Tensor trace = at::empty({trace_size, 7}, at::kDouble);
     auto trace_values = trace.accessor<double, 2>();
     for (std::int64_t index = 0; index < trace_size; ++index) {
         trace_values[index][0] = result.certificate_observations[index];
         trace_values[index][1] = result.certificate_dimensions[index];
+        trace_values[index][2] = result.certificate_leakages[index];
+        for (int scale = 0; scale < 4; ++scale) {
+            trace_values[index][3 + scale] =
+                result.certificate_scales[4 * index + scale];
+        }
     }
 
     return std::make_tuple(
@@ -148,6 +198,21 @@ TorchResult copy_result(const FactorizationResult& result) {
         timings,
         trace,
         static_cast<std::int64_t>(result.stop_reason));
+}
+
+TorchExactFroResult copy_exact_fro_result(
+    const FactorizationResult& result) {
+    TorchResult copied = copy_result(result);
+    return std::make_tuple(
+        std::get<0>(copied),
+        std::get<1>(copied),
+        std::get<2>(copied),
+        std::get<3>(copied),
+        std::get<4>(copied),
+        std::get<5>(copied),
+        std::get<6>(copied),
+        std::get<7>(copied),
+        static_cast<std::int64_t>(result.status));
 }
 
 double structured_error_squared(
@@ -196,26 +261,53 @@ math::Certificate certificate_from_trace(
     const at::Tensor& trace,
     std::int64_t input_dimension,
     double tolerance,
-    double failure_probability) {
+    double failure_probability,
+    std::int64_t max_observations) {
     TORCH_CHECK(trace.device().is_cpu(), "trace must be on the CPU");
     TORCH_CHECK(trace.scalar_type() == at::kDouble, "trace must use float64");
     TORCH_CHECK(
-        trace.dim() == 2 && trace.size(1) == 2,
-        "trace must have shape (rounds, 2)");
+        trace.dim() == 2 && (trace.size(1) == 2 || trace.size(1) == 7),
+        "trace must have shape (rounds, 2) or (rounds, 7)");
     TORCH_CHECK(
         input_dimension >= 2 &&
         input_dimension <= std::numeric_limits<int>::max(),
         "input_dimension must fit an LP64 integer above one");
+    TORCH_CHECK(
+        max_observations >= 1 &&
+        max_observations <= std::numeric_limits<int>::max(),
+        "max_observations must fit a positive LP64 integer");
+
+    int horizon = static_cast<int>(max_observations);
 
     math::Certificate certificate(
         static_cast<int>(input_dimension),
         tolerance * tolerance,
-        failure_probability);
+        failure_probability,
+        horizon);
     auto values = trace.accessor<double, 2>();
     for (std::int64_t row = 0; row < trace.size(0); ++row) {
-        certificate.update(
-            values[row][0],
-            static_cast<int>(values[row][1]));
+        double dimension_value = values[row][1];
+        TORCH_CHECK(
+            std::isfinite(dimension_value) &&
+            std::floor(dimension_value) == dimension_value &&
+            dimension_value >= 2.0 &&
+            dimension_value <= input_dimension,
+            "trace dimensions must be integers between two and input_dimension");
+        int unused_dimension = static_cast<int>(dimension_value);
+        if (trace.size(1) == 2) {
+            certificate.update(
+                values[row][0],
+                unused_dimension);
+        } else {
+            math::CertificateTraceEntry entry;
+            entry.x = values[row][0];
+            entry.unused_dimension = unused_dimension;
+            entry.leakage = values[row][2];
+            for (int scale = 0; scale < 4; ++scale) {
+                entry.predictable_scales[scale] = values[row][3 + scale];
+            }
+            certificate.update_from_trace(entry);
+        }
     }
     return certificate;
 }
@@ -225,12 +317,14 @@ double replay_certificate(
     std::int64_t input_dimension,
     double tolerance,
     double failure_probability,
-    double candidate) {
+    double candidate,
+    std::int64_t max_observations) {
     math::Certificate certificate = certificate_from_trace(
         trace,
         input_dimension,
         tolerance,
-        failure_probability);
+        failure_probability,
+        max_observations);
     return certificate.replay(candidate);
 }
 
@@ -238,13 +332,61 @@ double invert_certificate(
     const at::Tensor& trace,
     std::int64_t input_dimension,
     double tolerance,
-    double failure_probability) {
+    double failure_probability,
+    std::int64_t max_observations) {
     math::Certificate certificate = certificate_from_trace(
         trace,
         input_dimension,
         tolerance,
-        failure_probability);
+        failure_probability,
+        max_observations);
     return certificate.continuous_inverse();
+}
+
+double replay_raw_gaussian_certificate(
+    std::int64_t count,
+    double sum,
+    std::int64_t dimension,
+    double spectral_cap,
+    double gamma,
+    double candidate) {
+    TORCH_CHECK(
+        count >= 0 && count <= std::numeric_limits<int>::max(),
+        "count must fit a nonnegative LP64 integer");
+    TORCH_CHECK(
+        dimension >= 1 && dimension <= std::numeric_limits<int>::max(),
+        "dimension must fit a positive LP64 integer");
+    return std::exp(math::raw_gaussian_log_value(
+        static_cast<int>(count),
+        sum,
+        static_cast<int>(dimension),
+        spectral_cap,
+        gamma,
+        candidate));
+}
+
+double invert_raw_gaussian_certificate(
+    std::int64_t count,
+    double sum,
+    std::int64_t dimension,
+    double spectral_cap,
+    double gamma,
+    double failure_probability,
+    double upper) {
+    TORCH_CHECK(
+        count >= 0 && count <= std::numeric_limits<int>::max(),
+        "count must fit a nonnegative LP64 integer");
+    TORCH_CHECK(
+        dimension >= 1 && dimension <= std::numeric_limits<int>::max(),
+        "dimension must fit a positive LP64 integer");
+    return math::raw_gaussian_continuous_inverse(
+        static_cast<int>(count),
+        sum,
+        static_cast<int>(dimension),
+        spectral_cap,
+        gamma,
+        failure_probability,
+        upper);
 }
 
 TorchResult run_ac_rsvd(
@@ -254,7 +396,9 @@ TorchResult run_ac_rsvd(
     std::int64_t block_size,
     std::int64_t seed,
     std::int64_t stream,
-    bool sequential_orthogonalization) {
+    bool sequential_orthogonalization,
+    bool enhanced_mode,
+    std::int64_t diagnostic_test_size) {
     math::Matrix matrix = copy_input(input);
     math::DenseOperator op(matrix);
 
@@ -265,7 +409,43 @@ TorchResult run_ac_rsvd(
     options.seed = static_cast<std::uint64_t>(seed);
     options.stream = static_cast<std::uint64_t>(stream);
     options.use_sequential_orthogonalization = sequential_orthogonalization;
+    options.use_enhanced_mode = enhanced_mode;
+    TORCH_CHECK(
+        diagnostic_test_size >= 0 && diagnostic_test_size <= 512,
+        "diagnostic_test_size must be between zero and 512");
+    options.diagnostic_test_size =
+        static_cast<int>(diagnostic_test_size);
     return copy_result(compute_ac_rsvd(op, options));
+}
+
+TorchExactFroResult run_ac_rsvd_fro(
+    const at::Tensor& input,
+    double tolerance,
+    double failure_probability,
+    double frobenius_norm_squared,
+    std::int64_t block_size,
+    std::int64_t seed,
+    std::int64_t stream,
+    bool sequential_orthogonalization,
+    bool enhanced_mode,
+    std::int64_t diagnostic_test_size) {
+    math::Matrix matrix = copy_input(input);
+    math::DenseOperator op(matrix);
+
+    AcRsvdOptions options;
+    options.tolerance = tolerance;
+    options.failure_probability = failure_probability;
+    options.exact_frobenius_norm_squared = frobenius_norm_squared;
+    options.block_size = copy_block_size(block_size);
+    options.seed = static_cast<std::uint64_t>(seed);
+    options.stream = static_cast<std::uint64_t>(stream);
+    options.use_sequential_orthogonalization = sequential_orthogonalization;
+    options.use_enhanced_mode = enhanced_mode;
+    TORCH_CHECK(
+        diagnostic_test_size >= 0 && diagnostic_test_size <= 512,
+        "diagnostic_test_size must be between zero and 512");
+    options.diagnostic_test_size = static_cast<int>(diagnostic_test_size);
+    return copy_exact_fro_result(compute_ac_rsvd(op, options));
 }
 
 TorchResult run_randqb_mf_fro(
@@ -312,7 +492,10 @@ TorchResult run_ac_rsvd_hadamard(
     std::int64_t matrix_seed,
     std::int64_t algorithm_seed,
     std::int64_t stream,
-    bool sequential_orthogonalization) {
+    bool sequential_orthogonalization,
+    bool enhanced_mode,
+    std::int64_t diagnostic_test_size) {
+    auto setup_start = std::chrono::steady_clock::now();
     math::StructuredHadamardOperator op(
         copy_spectrum(spectrum),
         static_cast<std::uint64_t>(matrix_seed));
@@ -324,10 +507,60 @@ TorchResult run_ac_rsvd_hadamard(
     options.seed = static_cast<std::uint64_t>(algorithm_seed);
     options.stream = static_cast<std::uint64_t>(stream);
     options.use_sequential_orthogonalization = sequential_orthogonalization;
+    options.use_enhanced_mode = enhanced_mode;
+    TORCH_CHECK(
+        diagnostic_test_size >= 0 && diagnostic_test_size <= 512,
+        "diagnostic_test_size must be between zero and 512");
+    options.diagnostic_test_size =
+        static_cast<int>(diagnostic_test_size);
 
+    auto setup_end = std::chrono::steady_clock::now();
     FactorizationResult result = compute_ac_rsvd(op, options);
+    result.statistics.total_seconds +=
+        std::chrono::duration<double>(setup_end - setup_start).count();
     result.direct_error_squared = structured_error_squared(op, result);
     return copy_result(result);
+}
+
+TorchExactFroResult run_ac_rsvd_fro_hadamard(
+    const at::Tensor& spectrum,
+    double tolerance,
+    double failure_probability,
+    std::int64_t block_size,
+    std::int64_t matrix_seed,
+    std::int64_t algorithm_seed,
+    std::int64_t stream,
+    bool sequential_orthogonalization,
+    std::int64_t diagnostic_test_size) {
+    auto setup_start = std::chrono::steady_clock::now();
+    math::StructuredHadamardOperator op(
+        copy_spectrum(spectrum),
+        static_cast<std::uint64_t>(matrix_seed));
+
+    AcRsvdOptions options;
+    options.tolerance = tolerance;
+    options.failure_probability = failure_probability;
+    options.block_size = copy_block_size(block_size);
+    options.seed = static_cast<std::uint64_t>(algorithm_seed);
+    options.stream = static_cast<std::uint64_t>(stream);
+    options.use_sequential_orthogonalization = sequential_orthogonalization;
+    options.use_enhanced_mode = true;
+    TORCH_CHECK(
+        diagnostic_test_size >= 0 && diagnostic_test_size <= 512,
+        "diagnostic_test_size must be between zero and 512");
+    options.diagnostic_test_size = static_cast<int>(diagnostic_test_size);
+    double frobenius_norm = op.frobenius_norm();
+    options.exact_frobenius_norm_squared =
+        frobenius_norm * frobenius_norm;
+
+    auto setup_end = std::chrono::steady_clock::now();
+    FactorizationResult result = compute_ac_rsvd(op, options);
+    result.statistics.total_seconds +=
+        std::chrono::duration<double>(setup_end - setup_start).count();
+    if (result.status == FactorizationStatus::success) {
+        result.direct_error_squared = structured_error_squared(op, result);
+    }
+    return copy_exact_fro_result(result);
 }
 
 TorchResult run_randqb_mf_fro_hadamard(
@@ -337,6 +570,7 @@ TorchResult run_randqb_mf_fro_hadamard(
     std::int64_t matrix_seed,
     std::int64_t algorithm_seed,
     std::int64_t stream) {
+    auto setup_start = std::chrono::steady_clock::now();
     math::StructuredHadamardOperator op(
         copy_spectrum(spectrum),
         static_cast<std::uint64_t>(matrix_seed));
@@ -347,7 +581,10 @@ TorchResult run_randqb_mf_fro_hadamard(
     options.seed = static_cast<std::uint64_t>(algorithm_seed);
     options.stream = static_cast<std::uint64_t>(stream);
 
+    auto setup_end = std::chrono::steady_clock::now();
     FactorizationResult result = compute_randqb_mf_fro(op, options);
+    result.statistics.total_seconds +=
+        std::chrono::duration<double>(setup_end - setup_start).count();
     result.direct_error_squared = structured_error_squared(op, result);
     return copy_result(result);
 }
@@ -359,6 +596,7 @@ TorchResult run_randqb_ei_hadamard(
     std::int64_t matrix_seed,
     std::int64_t algorithm_seed,
     std::int64_t stream) {
+    auto setup_start = std::chrono::steady_clock::now();
     math::StructuredHadamardOperator op(
         copy_spectrum(spectrum),
         static_cast<std::uint64_t>(matrix_seed));
@@ -370,7 +608,10 @@ TorchResult run_randqb_ei_hadamard(
     options.seed = static_cast<std::uint64_t>(algorithm_seed);
     options.stream = static_cast<std::uint64_t>(stream);
 
+    auto setup_end = std::chrono::steady_clock::now();
     FactorizationResult result = compute_randqb_ei(op, options);
+    result.statistics.total_seconds +=
+        std::chrono::duration<double>(setup_end - setup_start).count();
     result.direct_error_squared = structured_error_squared(op, result);
     return copy_result(result);
 }
@@ -447,8 +688,16 @@ TORCH_LIBRARY(ac_rsvd, module) {
     module.def(
         "run_ac_rsvd(Tensor matrix, float tolerance, float failure_probability, "
         "int block_size, int seed=0, int stream=0, "
-        "bool sequential_orthogonalization=False) "
+        "bool sequential_orthogonalization=False, "
+        "bool enhanced_mode=True, int diagnostic_test_size=512) "
         "-> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, int)");
+    module.def(
+        "run_ac_rsvd_fro(Tensor matrix, float tolerance, "
+        "float failure_probability, float frobenius_norm_squared, "
+        "int block_size, int seed=0, int stream=0, "
+        "bool sequential_orthogonalization=False, "
+        "bool enhanced_mode=True, int diagnostic_test_size=512) "
+        "-> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, int, int)");
     module.def(
         "run_randqb_mf_fro(Tensor matrix, float tolerance, int block_size, "
         "int seed=0, int stream=0) "
@@ -461,8 +710,16 @@ TORCH_LIBRARY(ac_rsvd, module) {
         "run_ac_rsvd_hadamard(Tensor spectrum, float tolerance, "
         "float failure_probability, int block_size, int matrix_seed, "
         "int algorithm_seed=0, int stream=0, "
-        "bool sequential_orthogonalization=False) "
+        "bool sequential_orthogonalization=False, "
+        "bool enhanced_mode=True, int diagnostic_test_size=512) "
         "-> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, int)");
+    module.def(
+        "run_ac_rsvd_fro_hadamard(Tensor spectrum, float tolerance, "
+        "float failure_probability, int block_size, int matrix_seed, "
+        "int algorithm_seed=0, int stream=0, "
+        "bool sequential_orthogonalization=False, "
+        "int diagnostic_test_size=512) "
+        "-> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, int, int)");
     module.def(
         "run_randqb_mf_fro_hadamard(Tensor spectrum, float tolerance, "
         "int block_size, int matrix_seed, int algorithm_seed=0, int stream=0) "
@@ -473,10 +730,18 @@ TORCH_LIBRARY(ac_rsvd, module) {
         "-> (Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, int)");
     module.def(
         "replay_certificate(Tensor trace, int input_dimension, float tolerance, "
-        "float failure_probability, float candidate) -> float");
+        "float failure_probability, float candidate, "
+        "int max_observations) -> float");
     module.def(
         "invert_certificate(Tensor trace, int input_dimension, float tolerance, "
-        "float failure_probability) -> float");
+        "float failure_probability, int max_observations) -> float");
+    module.def(
+        "replay_raw_gaussian_certificate(int count, float sum, int dimension, "
+        "float spectral_cap, float gamma, float candidate) -> float");
+    module.def(
+        "invert_raw_gaussian_certificate(int count, float sum, int dimension, "
+        "float spectral_cap, float gamma, float failure_probability, "
+        "float upper) -> float");
     module.def(
         "theory_bounds_e5_analytic(Tensor spectrum, int rows, int cols, "
         "float tolerance, float failure_probability, "
@@ -487,9 +752,13 @@ TORCH_LIBRARY(ac_rsvd, module) {
 
 TORCH_LIBRARY_IMPL(ac_rsvd, CPU, module) {
     module.impl("run_ac_rsvd", &ac_rsvd::run_ac_rsvd);
+    module.impl("run_ac_rsvd_fro", &ac_rsvd::run_ac_rsvd_fro);
     module.impl("run_randqb_mf_fro", &ac_rsvd::run_randqb_mf_fro);
     module.impl("run_randqb_ei", &ac_rsvd::run_randqb_ei);
     module.impl("run_ac_rsvd_hadamard", &ac_rsvd::run_ac_rsvd_hadamard);
+    module.impl(
+        "run_ac_rsvd_fro_hadamard",
+        &ac_rsvd::run_ac_rsvd_fro_hadamard);
     module.impl(
         "run_randqb_mf_fro_hadamard",
         &ac_rsvd::run_randqb_mf_fro_hadamard);
@@ -499,4 +768,13 @@ TORCH_LIBRARY_IMPL(ac_rsvd, CPU, module) {
     module.impl(
         "theory_bounds_e5_analytic",
         &ac_rsvd::theory_bounds_e5_analytic);
+}
+
+TORCH_LIBRARY_IMPL(ac_rsvd, CatchAll, module) {
+    module.impl(
+        "replay_raw_gaussian_certificate",
+        &ac_rsvd::replay_raw_gaussian_certificate);
+    module.impl(
+        "invert_raw_gaussian_certificate",
+        &ac_rsvd::invert_raw_gaussian_certificate);
 }

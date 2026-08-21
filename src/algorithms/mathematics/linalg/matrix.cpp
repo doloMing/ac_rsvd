@@ -78,21 +78,54 @@ void Matrix::fill(double value) {
 }
 
 void Matrix::append_columns(const Matrix& block) {
+    append_columns(block, block.cols());
+}
+
+void Matrix::append_columns(const Matrix& block, int count) {
     if (rows_ != block.rows()) {
         throw std::invalid_argument("Matrices must have the same row count");
     }
-    long long new_size = static_cast<long long>(size()) + block.size();
+    if (count < 0 || count > block.cols()) {
+        throw std::invalid_argument("Column count is out of range");
+    }
+    long long added_size = static_cast<long long>(rows_) * count;
+    long long new_size = static_cast<long long>(size()) + added_size;
     long long new_column_count =
-        static_cast<long long>(cols_) + block.cols();
+        static_cast<long long>(cols_) + count;
     if (new_size > std::numeric_limits<int>::max() ||
         new_column_count > std::numeric_limits<int>::max()) {
         throw std::length_error("Matrix is too large for the LP64 backend");
     }
-    if (block.size() > 0) {
+    if (added_size > 0) {
         // Whole columns are contiguous, so appending is one vector insertion.
-        values_.insert(values_.end(), block.data(), block.data() + block.size());
+        values_.insert(
+            values_.end(), block.data(), block.data() + added_size);
     }
     cols_ = static_cast<int>(new_column_count);
+}
+
+void Matrix::truncate_columns(int count) {
+    if (count < 0 || count > cols_) {
+        throw std::invalid_argument("Column count is out of range");
+    }
+    values_.resize(static_cast<std::size_t>(rows_) * count);
+    cols_ = count;
+}
+
+void Matrix::give_values_to(std::vector<double>& output) {
+    output.clear();
+    output.swap(values_);
+    rows_ = 0;
+    cols_ = 0;
+}
+
+void Matrix::give_values_to(Matrix& output) {
+    output.rows_ = rows_;
+    output.cols_ = cols_;
+    output.values_.clear();
+    output.values_.swap(values_);
+    rows_ = 0;
+    cols_ = 0;
 }
 
 Matrix copy_block(

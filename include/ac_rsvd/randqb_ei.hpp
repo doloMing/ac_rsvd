@@ -12,7 +12,7 @@ struct RandQbEiOptions {
     double tolerance = 1e-8;
     // The EI recurrence starts from this exact Frobenius norm.
     double frobenius_norm = -1.0;
-    int block_size = 32;
+    int block_size = 16;
     std::uint64_t seed = 0;
     std::uint64_t stream = 0;
 };

@@ -11,7 +11,7 @@ double gaussian_value(
     std::uint64_t direction,
     std::uint64_t row);
 
-// Fill a column-major panel without depending on earlier draws.
+// Fill a column-major panel reproducibly for any OpenMP thread count.
 void fill_gaussian(
     double* values,
     int rows,

@@ -1,10 +1,13 @@
 /build/
 /build-*/
-/README.md
-/docs/
 __pycache__/
 *.pyc
 .pytest_cache/
-/tests/
+.ipynb_checkpoints/
+
+# Local documentation and experiments are kept outside source releases.
+/README.md
+/docs/
 /examples/
 /experiments/
+/tests/

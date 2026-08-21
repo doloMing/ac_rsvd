@@ -29,6 +29,10 @@ public:
 
     void fill(double value);
     void append_columns(const Matrix& block);
+    void append_columns(const Matrix& block, int count);
+    void truncate_columns(int count);
+    void give_values_to(std::vector<double>& output);
+    void give_values_to(Matrix& output);
 
 private:
     int rows_;

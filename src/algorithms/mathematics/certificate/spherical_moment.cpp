@@ -20,12 +20,12 @@ double log_phi(int dimension, double s) {
         return 0.0;
     }
 
-    // This is 1F1(1/2; d/2; s*d). The term ratio stays below 2*abs(s).
+    // This is 1F1(1/2; d/2; s*d).
     long double term = 1.0L;
     long double sum = 1.0L;
     long double correction = 0.0L;
-    long double z = static_cast<long double>(s) * dimension;
     long double half_dimension = 0.5L * dimension;
+    long double z = static_cast<long double>(s) * dimension;
 
     for (int k = 0; k < 10000; ++k) {
         term *= z * (0.5L + k);

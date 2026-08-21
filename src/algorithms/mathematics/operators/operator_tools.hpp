@@ -13,6 +13,20 @@ Matrix apply_a(
     const Matrix& input,
     RunStatistics& statistics);
 
+void apply_a_into(
+    const MatrixOperator& matrix,
+    const Matrix& input,
+    Matrix& output,
+    RunStatistics& statistics);
+
+void apply_a_columns_into(
+    const MatrixOperator& matrix,
+    const Matrix& input,
+    int first_column,
+    int column_count,
+    Matrix& output,
+    RunStatistics& statistics);
+
 Matrix apply_at(
     const MatrixOperator& matrix,
     const Matrix& input,

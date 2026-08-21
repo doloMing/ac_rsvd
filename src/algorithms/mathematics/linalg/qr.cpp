@@ -39,22 +39,30 @@ static void check_lapack_info(int info, const char* routine) {
 }
 
 QrResult thin_qr(const Matrix& matrix) {
+    QrResult result;
+    result.q = matrix;
+    thin_qr_in_place(result.q, result.r, result.diagonal);
+    return result;
+}
+
+void thin_qr_in_place(
+    Matrix& matrix,
+    Matrix& r,
+    std::vector<double>& diagonal) {
     int rows = matrix.rows();
     int cols = matrix.cols();
     int thin_cols = std::min(rows, cols);
 
-    QrResult result;
-    result.q = Matrix(rows, thin_cols);
-    result.r = Matrix(thin_cols, cols);
-    result.diagonal.assign(thin_cols, 0.0);
+    r = Matrix(thin_cols, cols);
+    diagonal.assign(thin_cols, 0.0);
 
     if (thin_cols == 0) {
-        return result;
+        matrix.truncate_columns(0);
+        return;
     }
 
-    Matrix factors = matrix;
     std::vector<double> tau(thin_cols);
-    int stride = factors.leading_dimension();
+    int stride = matrix.leading_dimension();
     int info = 0;
     int workspace_size = -1;
     double workspace_query = 0.0;
@@ -62,7 +70,7 @@ QrResult thin_qr(const Matrix& matrix) {
     dgeqrf_(
         &rows,
         &cols,
-        factors.data(),
+        matrix.data(),
         &stride,
         tau.data(),
         &workspace_query,
@@ -75,7 +83,7 @@ QrResult thin_qr(const Matrix& matrix) {
     dgeqrf_(
         &rows,
         &cols,
-        factors.data(),
+        matrix.data(),
         &stride,
         tau.data(),
         workspace.data(),
@@ -87,18 +95,18 @@ QrResult thin_qr(const Matrix& matrix) {
     for (int col = 0; col < cols; ++col) {
         int last_row = std::min(col, thin_cols - 1);
         for (int row = 0; row <= last_row; ++row) {
-            result.r(row, col) = factors(row, col);
+            r(row, col) = matrix(row, col);
         }
     }
 
-    result.q = copy_block(factors, 0, 0, rows, thin_cols);
+    matrix.truncate_columns(thin_cols);
     workspace_size = -1;
     workspace_query = 0.0;
     dorgqr_(
         &rows,
         &thin_cols,
         &thin_cols,
-        result.q.data(),
+        matrix.data(),
         &stride,
         tau.data(),
         &workspace_query,
@@ -107,12 +115,12 @@ QrResult thin_qr(const Matrix& matrix) {
     check_lapack_info(info, "dorgqr");
 
     workspace_size = std::max(1, static_cast<int>(std::ceil(workspace_query)));
-    workspace.assign(workspace_size, 0.0);
+    workspace.resize(workspace_size);
     dorgqr_(
         &rows,
         &thin_cols,
         &thin_cols,
-        result.q.data(),
+        matrix.data(),
         &stride,
         tau.data(),
         workspace.data(),
@@ -122,18 +130,16 @@ QrResult thin_qr(const Matrix& matrix) {
 
     // The nonnegative diagonal gives the sequential residual norms in order.
     for (int index = 0; index < thin_cols; ++index) {
-        if (result.r(index, index) < 0.0) {
+        if (r(index, index) < 0.0) {
             for (int row = 0; row < rows; ++row) {
-                result.q(row, index) = -result.q(row, index);
+                matrix(row, index) = -matrix(row, index);
             }
             for (int col = index; col < cols; ++col) {
-                result.r(index, col) = -result.r(index, col);
+                r(index, col) = -r(index, col);
             }
         }
-        result.diagonal[index] = result.r(index, index);
+        diagonal[index] = r(index, index);
     }
-
-    return result;
 }
 
 }  // namespace math

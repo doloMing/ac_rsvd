@@ -37,23 +37,16 @@ static Matrix make_basis_block(const Matrix& sample, const Matrix& basis) {
     return math::thin_qr(block).q;
 }
 
-static Matrix join_rows(const Matrix& top, const Matrix& bottom) {
-    Matrix joined(top.rows() + bottom.rows(), top.cols());
-    math::set_block(joined, 0, 0, top);
-    math::set_block(joined, top.rows(), 0, bottom);
-    return joined;
-}
-
 static FactorizationResult make_result(
-    const Matrix& q,
-    const Matrix& b,
+    Matrix& q,
+    Matrix& bt,
     RunStatistics statistics,
     StopReason stop_reason,
     double residual_estimate_squared,
     std::chrono::steady_clock::time_point algorithm_start) {
     FactorizationResult result;
     result.rows = q.rows();
-    result.cols = b.cols();
+    result.cols = bt.rows();
     result.rank = q.cols();
     result.range_rank = q.cols();
     result.boundary_only_rank = q.cols();
@@ -68,16 +61,22 @@ static FactorizationResult make_result(
         return result;
     }
 
-    // The library returns the compact SVD of the paper's QB factorization.
+    // The columns of B^T become the right singular vectors in place.
     auto svd_start = std::chrono::steady_clock::now();
-    math::SvdResult svd = math::compact_qb_svd(q, b);
-    Matrix v = math::transpose(svd.vt);
+    math::TallSvdResult svd = math::tall_svd_in_place(bt);
+    Matrix core_left_vectors(q.cols(), q.cols());
+    for (int col = 0; col < q.cols(); ++col) {
+        for (int row = 0; row < q.cols(); ++row) {
+            core_left_vectors(row, col) = svd.vt(col, row);
+        }
+    }
+    Matrix u = math::multiply(q, core_left_vectors);
     auto svd_end = std::chrono::steady_clock::now();
     result.statistics.svd_seconds +=
         std::chrono::duration<double>(svd_end - svd_start).count();
-    result.u.assign(svd.u.data(), svd.u.data() + svd.u.size());
     result.singular_values = svd.singular_values;
-    result.v.assign(v.data(), v.data() + v.size());
+    u.give_values_to(result.u);
+    bt.give_values_to(result.v);
     auto end = std::chrono::steady_clock::now();
     result.statistics.total_seconds =
         std::chrono::duration<double>(end - algorithm_start).count();
@@ -85,21 +84,19 @@ static FactorizationResult make_result(
 }
 
 static void prune_last_block(
-    const Matrix& old_q,
-    const Matrix& old_b,
+    Matrix& q,
+    Matrix& bt,
     int last_block_size,
     double tolerance_squared,
-    Matrix& q,
-    Matrix& b,
     double& residual_estimate_squared) {
-    int first = old_q.cols() - last_block_size;
+    int first = q.cols() - last_block_size;
     std::vector<std::pair<double, int>> row_energy;
     row_energy.reserve(last_block_size);
 
     for (int row = 0; row < last_block_size; ++row) {
         double energy = 0.0;
-        for (int col = 0; col < old_b.cols(); ++col) {
-            double value = old_b(first + row, col);
+        for (int row_index = 0; row_index < bt.rows(); ++row_index) {
+            double value = bt(row_index, first + row);
             energy += value * value;
         }
         row_energy.push_back(std::make_pair(energy, row));
@@ -118,39 +115,28 @@ static void prune_last_block(
         discard[row_energy[index].second] = 1;
     }
 
-    int kept_from_last = 0;
-    for (int index = 0; index < last_block_size; ++index) {
-        if (!discard[index]) {
-            ++kept_from_last;
-        }
-    }
-
-    q = Matrix(old_q.rows(), first + kept_from_last);
-    b = Matrix(first + kept_from_last, old_b.cols());
-    if (first > 0) {
-        math::set_block(q, 0, 0, math::copy_block(old_q, 0, 0, q.rows(), first));
-        math::set_block(b, 0, 0, math::copy_block(old_b, 0, 0, first, b.cols()));
-    }
-
     int output_col = first;
     for (int index = 0; index < last_block_size; ++index) {
         if (discard[index]) {
             continue;
         }
         for (int row = 0; row < q.rows(); ++row) {
-            q(row, output_col) = old_q(row, first + index);
+            q(row, output_col) = q(row, first + index);
         }
-        for (int col = 0; col < b.cols(); ++col) {
-            b(output_col, col) = old_b(first + index, col);
+        for (int row = 0; row < bt.rows(); ++row) {
+            bt(row, output_col) = bt(row, first + index);
         }
         ++output_col;
     }
+    q.truncate_columns(output_col);
+    bt.truncate_columns(output_col);
 }
 
 FactorizationResult compute_randqb_mf_fro(
     const MatrixOperator& matrix,
     const RandQbMfFroOptions& options) {
-    if (options.tolerance <= 0.0 || options.block_size <= 0) {
+    if (!std::isfinite(options.tolerance) ||
+        options.tolerance <= 0.0 || options.block_size <= 0) {
         throw std::invalid_argument("Tolerance and block size must be positive");
     }
 
@@ -160,7 +146,8 @@ FactorizationResult compute_randqb_mf_fro(
     double tolerance_squared = options.tolerance * options.tolerance;
 
     Matrix q(rows, 0);
-    Matrix b(0, cols);
+    // B^T keeps every accepted block contiguous.
+    Matrix bt(cols, 0);
     RunStatistics statistics;
     int last_block_size = 0;
     double residual_estimate_squared = 0.0;
@@ -188,12 +175,10 @@ FactorizationResult compute_randqb_mf_fro(
             omega.data()[index] *= scale;
         }
 
-        Matrix z = math::apply_a(matrix, omega, statistics);
-        Matrix sample = z;
+        Matrix sample = math::apply_a(matrix, omega, statistics);
         if (q.cols() > 0) {
-            Matrix b_omega = math::multiply(b, omega);
-            Matrix represented = math::multiply(q, b_omega);
-            subtract_matrix(sample, represented);
+            Matrix b_omega = math::transpose_multiply(bt, omega);
+            math::gemm(q, false, b_omega, false, -1.0, 1.0, sample);
         }
 
         // ||(A - QB) Omega||_F estimates the current residual norm.
@@ -203,27 +188,23 @@ FactorizationResult compute_randqb_mf_fro(
             if (q.cols() == 0) {
                 return make_result(
                     q,
-                    b,
+                    bt,
                     statistics,
                     StopReason::tolerance_met,
                     residual_estimate_squared,
                     algorithm_start);
             }
 
-            Matrix pruned_q;
-            Matrix pruned_b;
             prune_last_block(
                 q,
-                b,
+                bt,
                 last_block_size,
                 tolerance_squared,
-                pruned_q,
-                pruned_b,
                 residual_estimate_squared);
             // The estimate now includes the energy of every discarded row.
             return make_result(
-                pruned_q,
-                pruned_b,
+                q,
+                bt,
                 statistics,
                 StopReason::tolerance_met,
                 residual_estimate_squared,
@@ -233,7 +214,7 @@ FactorizationResult compute_randqb_mf_fro(
         if (remaining_rank == 0) {
             return make_result(
                 q,
-                b,
+                bt,
                 statistics,
                 StopReason::full_rank,
                 residual_estimate_squared,
@@ -246,10 +227,9 @@ FactorizationResult compute_randqb_mf_fro(
         statistics.orthogonalization_seconds +=
             std::chrono::duration<double>(orth_end - orth_start).count();
         Matrix at_q = math::apply_at(matrix, q_block, statistics);
-        Matrix b_block = math::transpose(at_q);
         last_block_size = q_block.cols();
-        q = math::join_columns(q, q_block);
-        b = join_rows(b, b_block);
+        q.append_columns(q_block);
+        bt.append_columns(at_q);
     }
 }
 

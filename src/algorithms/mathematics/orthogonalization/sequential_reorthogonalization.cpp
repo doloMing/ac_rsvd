@@ -14,13 +14,13 @@ BlockOrthogonalizationResult orthogonalize_sequential_block(
     const Matrix& basis,
     int projection_passes) {
     BlockOrthogonalizationResult result;
-    result.projected = Matrix(block.rows(), block.cols());
+    Matrix projected(block.rows(), block.cols());
 
     // Remove the old basis one column at a time.
     for (int col = 0; col < block.cols(); ++col) {
         Matrix column = copy_block(block, 0, col, block.rows(), 1);
         project_out(basis, column, projection_passes);
-        set_block(result.projected, 0, col, column);
+        set_block(projected, 0, col, column);
     }
 
     int q_columns = std::min(block.rows(), block.cols());
@@ -30,7 +30,7 @@ BlockOrthogonalizationResult orthogonalize_sequential_block(
 
     for (int col = 0; col < q_columns; ++col) {
         Matrix column = copy_block(
-            result.projected, 0, col, block.rows(), 1);
+            projected, 0, col, block.rows(), 1);
 
         // Two passes keep the new columns mutually orthogonal.
         for (int pass = 0; pass < projection_passes; ++pass) {

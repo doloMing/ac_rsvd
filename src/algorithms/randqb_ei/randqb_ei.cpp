@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <stdexcept>
 
 #include "algorithms/mathematics/linalg/blas_lapack.hpp"
@@ -32,23 +33,16 @@ static Matrix make_basis_block(const Matrix& sample, const Matrix& basis) {
     return math::thin_qr(block).q;
 }
 
-static Matrix join_rows(const Matrix& top, const Matrix& bottom) {
-    Matrix joined(top.rows() + bottom.rows(), top.cols());
-    math::set_block(joined, 0, 0, top);
-    math::set_block(joined, top.rows(), 0, bottom);
-    return joined;
-}
-
 static FactorizationResult make_result(
-    const Matrix& q,
-    const Matrix& b,
+    Matrix& q,
+    Matrix& bt,
     RunStatistics statistics,
     StopReason stop_reason,
     double residual_estimate_squared,
     std::chrono::steady_clock::time_point algorithm_start) {
     FactorizationResult result;
     result.rows = q.rows();
-    result.cols = b.cols();
+    result.cols = bt.rows();
     result.rank = q.cols();
     result.range_rank = q.cols();
     result.boundary_only_rank = q.cols();
@@ -63,16 +57,22 @@ static FactorizationResult make_result(
         return result;
     }
 
-    // The library returns the compact SVD of the paper's QB factorization.
+    // The columns of B^T become the right singular vectors in place.
     auto svd_start = std::chrono::steady_clock::now();
-    math::SvdResult svd = math::compact_qb_svd(q, b);
-    Matrix v = math::transpose(svd.vt);
+    math::TallSvdResult svd = math::tall_svd_in_place(bt);
+    Matrix core_left_vectors(q.cols(), q.cols());
+    for (int col = 0; col < q.cols(); ++col) {
+        for (int row = 0; row < q.cols(); ++row) {
+            core_left_vectors(row, col) = svd.vt(col, row);
+        }
+    }
+    Matrix u = math::multiply(q, core_left_vectors);
     auto svd_end = std::chrono::steady_clock::now();
     result.statistics.svd_seconds +=
         std::chrono::duration<double>(svd_end - svd_start).count();
-    result.u.assign(svd.u.data(), svd.u.data() + svd.u.size());
     result.singular_values = svd.singular_values;
-    result.v.assign(v.data(), v.data() + v.size());
+    u.give_values_to(result.u);
+    bt.give_values_to(result.v);
     auto end = std::chrono::steady_clock::now();
     result.statistics.total_seconds =
         std::chrono::duration<double>(end - algorithm_start).count();
@@ -82,10 +82,12 @@ static FactorizationResult make_result(
 FactorizationResult compute_randqb_ei(
     const MatrixOperator& matrix,
     const RandQbEiOptions& options) {
-    if (options.tolerance <= 0.0 || options.block_size <= 0) {
+    if (!std::isfinite(options.tolerance) ||
+        options.tolerance <= 0.0 || options.block_size <= 0) {
         throw std::invalid_argument("Tolerance and block size must be positive");
     }
-    if (options.frobenius_norm < 0.0) {
+    if (!std::isfinite(options.frobenius_norm) ||
+        options.frobenius_norm < 0.0) {
         throw std::invalid_argument("Frobenius norm cannot be negative");
     }
 
@@ -98,7 +100,8 @@ FactorizationResult compute_randqb_ei(
     RunStatistics statistics;
 
     Matrix q(rows, 0);
-    Matrix b(0, cols);
+    // B^T keeps every accepted block contiguous.
+    Matrix bt(cols, 0);
     auto algorithm_start = std::chrono::steady_clock::now();
 
     while (q.cols() < max_rank) {
@@ -113,13 +116,11 @@ FactorizationResult compute_randqb_ei(
             statistics.directions_processed);
         statistics.directions_processed += block_size;
 
-        Matrix z = math::apply_a(matrix, omega, statistics);
-        Matrix sample = z;
+        Matrix sample = math::apply_a(matrix, omega, statistics);
         if (q.cols() > 0) {
             // This is (A - QB) Omega without forming the residual.
-            Matrix b_omega = math::multiply(b, omega);
-            Matrix represented = math::multiply(q, b_omega);
-            subtract_matrix(sample, represented);
+            Matrix b_omega = math::transpose_multiply(bt, omega);
+            math::gemm(q, false, b_omega, false, -1.0, 1.0, sample);
         }
 
         auto orth_start = std::chrono::steady_clock::now();
@@ -128,12 +129,11 @@ FactorizationResult compute_randqb_ei(
         statistics.orthogonalization_seconds +=
             std::chrono::duration<double>(orth_end - orth_start).count();
         Matrix at_q = math::apply_at(matrix, q_block, statistics);
-        Matrix b_block = math::transpose(at_q);
         if (q.cols() > 0) {
             // This is zero exactly and repairs lost orthogonality in FP64.
             Matrix overlap = math::transpose_multiply(q_block, q);
-            Matrix correction = math::multiply(overlap, b);
-            subtract_matrix(b_block, correction);
+            Matrix correction = math::multiply_transpose(bt, overlap);
+            subtract_matrix(at_q, correction);
         }
 
         int keep = block_size;
@@ -142,7 +142,7 @@ FactorizationResult compute_randqb_ei(
         for (int row = 0; row < block_size; ++row) {
             double row_energy = 0.0;
             for (int col = 0; col < cols; ++col) {
-                double value = b_block(row, col);
+                double value = at_q(col, row);
                 row_energy += value * value;
             }
             error_squared -= row_energy;
@@ -153,15 +153,13 @@ FactorizationResult compute_randqb_ei(
             }
         }
 
-        Matrix kept_q = math::copy_block(q_block, 0, 0, rows, keep);
-        Matrix kept_b = math::copy_block(b_block, 0, 0, keep, cols);
-        q = math::join_columns(q, kept_q);
-        b = join_rows(b, kept_b);
+        q.append_columns(q_block, keep);
+        bt.append_columns(at_q, keep);
 
         if (tolerance_met) {
             return make_result(
                 q,
-                b,
+                bt,
                 statistics,
                 StopReason::tolerance_met,
                 error_squared,
@@ -171,7 +169,7 @@ FactorizationResult compute_randqb_ei(
 
     return make_result(
         q,
-        b,
+        bt,
         statistics,
         StopReason::full_rank,
         error_squared,
