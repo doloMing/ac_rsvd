@@ -6,7 +6,6 @@ __pycache__/
 .ipynb_checkpoints/
 
 # Local documentation and experiments are kept outside source releases.
-/README.md
 /docs/
 /examples/
 /experiments/
