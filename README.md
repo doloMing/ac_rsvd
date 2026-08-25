@@ -10,15 +10,14 @@ For a matrix $A\in\mathbb{R}^{m\times n}$, a tolerance $\tau>0$, and a
 failure probability $0<\delta<1$, AC-RSVD returns
 
 $$
-A \approx U_k\operatorname{diag}(s_k)V_k^\top
+A \approx U_k\mathrm{diag}(s_k)V_k^\top
 $$
 
 with the exact-arithmetic guarantee
 
 $$
-\Pr\!\left(
-\left\|A-U_k\operatorname{diag}(s_k)V_k^\top\right\|_F\leq\tau
-\right)\geq 1-\delta.
+\Pr(\|A-U_k\mathrm{diag}(s_k)V_k^\top\|_F\leq\tau)
+\geq 1-\delta.
 $$
 
 The output rank $k$ is determined during the calculation. No target rank or
@@ -236,7 +235,7 @@ returns the following main fields:
 | `range_rank` | Dimension of the final sampled range before projected-SVD truncation. |
 | `u` | Column-major $m\times k$ matrix $U_k$. |
 | `singular_values` | Length-$k$ vector of retained singular values. |
-| `v` | Column-major $n\times k$ matrix $V_k$. Reconstruct with $U_k\operatorname{diag}(s_k)V_k^\top$. |
+| `v` | Column-major $n\times k$ matrix $V_k$. Reconstruct with $U_k\mathrm{diag}(s_k)V_k^\top$. |
 | `status` | `success = 0` or, for AC-RSVD-Fro, `certificate_miss = 1`. Always inspect this field before using exact-Fro factors. |
 | `stop_reason` | Why range construction ended. The enum values are listed below. |
 | `residual_bound_source` | Source of the residual value used at termination. |
@@ -822,7 +821,7 @@ For each $\varepsilon\geq0$, define the tolerance rank
 
 $$
 r_\star(\varepsilon)=
-\min\left\{k:\sum_{i>k}\sigma_i(A)^2\leq\varepsilon^2\right\}.
+\min\{k:\sum_{i>k}\sigma_i(A)^2\leq\varepsilon^2\}.
 $$
 
 The Frobenius Eckart–Young theorem shows that no rank below
@@ -891,8 +890,8 @@ $$
 the same stored trace is inverted to obtain
 
 $$
-U_t=\inf\left\{c>0:
-W_t(c)\geq\frac{1}{\delta_{\mathrm{glob}}}\right\}.
+U_t=\inf\{c>0:
+W_t(c)\geq\frac{1}{\delta_{\mathrm{glob}}}\}.
 $$
 
 This gives a residual upper bound valid at the stopping round selected by the
@@ -911,7 +910,7 @@ $$
 
 An independent pilot block first gives an upper bound $L$ on
 $\lambda_{\max}(M_b)$. Fresh held-out Gaussian vectors then provide a
-time-uniform upper bound on $\operatorname{tr}(M_b)=\|(I-Q_bQ_b^\top)A\|_F^2$.
+time-uniform upper bound on $\mathrm{tr}(M_b)=\|(I-Q_bQ_b^\top)A\|_F^2$.
 If the diagnostic succeeds, it returns the fixed basis and its residual bound.
 If it does not succeed, ordinary range construction resumes with the same
 basis and ordinary trace.
