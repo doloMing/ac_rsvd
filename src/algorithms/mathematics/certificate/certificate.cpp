@@ -112,6 +112,8 @@ Certificate::Certificate(
         harmonic_number_ += 1.0 / value;
     }
 
+    // Fixed empirical restart scale grid. The proof only needs nonnegative
+    // scales fixed before their observations are drawn.
     int scale_count =
         1 + static_cast<int>(std::ceil(2.0 * std::log2(input_dimension)));
     for (int index = 0; index < scale_count; ++index) {
