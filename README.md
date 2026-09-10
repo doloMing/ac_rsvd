@@ -1,4 +1,4 @@
-# AC-RSVD: Anytime-Certified Randomized SVD
+# AC-RSVD: Anytime-Certified Randomized Singular Value Decomposition
 
 AC-RSVD computes a compact low-rank approximation of a large real matrix from
 products with the matrix and its transpose. The user supplies an absolute
@@ -1012,26 +1012,25 @@ The paper reports the following setup-inclusive results:
 
 | Comparison | Reported result |
 |---|---:|
-| AC-RSVD output rank relative to randQB-EI | about **5% smaller** at the median |
+| AC-RSVD low-rank compression relative to existing algorithms | about **5% lower output rank**, which reduces factor storage and application cost |
 | AC-RSVD excess rank relative to randQB-EI | about **8% lower** at the median |
-| AC-RSVD time relative to randQB-EI | about **23% faster** at the median |
-| AC-RSVD time relative to randQB-MF-Fro | about **18% faster** at the median |
+| AC-RSVD runtime relative to existing algorithms | about **18%–23% less runtime** |
 | AC-RSVD-Fro output rank relative to AC-RSVD | about **35% smaller** with the same matrix products |
 | AC-RSVD-Fro time relative to AC-RSVD | about **9% faster** at the median |
 
-In the reported accuracy comparison, AC-RSVD and randQB-EI have a zero
-tolerance-violation rate, while randQB-MF-Fro exceeds the tolerance in about
-46% of its runs. Blocked AC-RSVD preserves the stopping rounds and output ranks
-of column-by-column processing while substantially reducing
-orthogonalization and total time.
+In double-precision experiments, AC-RSVD meets the requested Frobenius-error
+tolerance in every run, whereas existing algorithms exceed it in up to 46% of
+runs. Blocked AC-RSVD preserves the stopping rounds and output ranks of
+column-by-column processing while substantially reducing orthogonalization and
+total time.
 
 ## 9. Paper, citation, author, and license
 
 ### Paper
 
-**Anytime-Certified Randomized SVD**<br>
+**Anytime-Certified Randomized Singular Value Decomposition**<br>
 Yang Tian<br>
-Manuscript submitted to the *SIAM Journal on Scientific Computing*.
+Manuscript submitted to the *IMA Journal of Numerical Analysis*.
 
 
 If AC-RSVD supports your research, please cite the paper:
@@ -1039,8 +1038,8 @@ If AC-RSVD supports your research, please cite the paper:
 ```bibtex
 @unpublished{Tian2026ACRSVD,
   author = {Tian, Yang},
-  title  = {Anytime-Certified Randomized SVD},
-  note   = {Manuscript submitted to the SIAM Journal on Scientific Computing},
+  title  = {Anytime-Certified Randomized Singular Value Decomposition},
+  note   = {Manuscript submitted to the IMA Journal of Numerical Analysis},
   year   = {2026}
 }
 ```
@@ -1050,7 +1049,7 @@ The software can be cited separately:
 ```bibtex
 @misc{Tian2026ACRSVDSoftware,
   author       = {Tian, Yang},
-  title        = {{AC-RSVD}: Anytime-Certified Randomized {SVD}},
+  title        = {{AC-RSVD}: Anytime-Certified Randomized Singular Value Decomposition},
   year         = {2026},
   howpublished = {GitHub repository},
   url          = {https://github.com/doloMing/ac_rsvd}
